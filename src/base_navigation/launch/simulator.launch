@@ -1,0 +1,25 @@
+<!-- Simulator-only launch file. Loads the robot and world models. -->
+<launch>
+  <env name="GAZEBO_RESOURCE_PATH" value="$(find turtlebot_gazebo)/worlds" />
+  <arg name="world_file" value="playground.world" />
+  <arg name="urdf_file" value="$(find xacro)/xacro.py '$(find turtlebot_description)/robots/kobuki_hexagons_kinect.urdf.xacro'" />
+
+  <param name="robot_description" command="$(arg urdf_file)" />
+
+  <!-- Load gazebo world -->
+  <include file="$(find gazebo_ros)/launch/empty_world.launch">
+    <arg name="use_sim_time" value="true"/>
+    <arg name="debug" value="false"/>
+    <arg name="gui" value="true" />
+    <arg name="world_name" value="$(arg world_file)"/>
+  </include>
+
+  <!-- Spawn robot model -->
+  <node name="spawn_turtlebot_model" pkg="gazebo_ros" type="spawn_model"
+        args="-unpause -urdf -param robot_description -model mobile_base" />
+
+  <!-- Get tf transforms from the robot model -->
+  <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher">
+    <param name="publish_frequency" type="double" value="30.0" />
+  </node>
+</launch>

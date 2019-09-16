@@ -1,0 +1,4 @@
+<launch>
+  <include file="$(find base_navigation)/launch/simulator.launch" />
+  <include file="$(find base_navigation)/launch/kobuki.launch" />
+</launch>
