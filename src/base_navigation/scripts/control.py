@@ -1,7 +1,5 @@
 #!/usr/bin/env python
 
-from time import sleep
-
 import rospy
 from geometry_msgs.msg import Pose2D, Twist
 from smach import State, StateMachine
@@ -23,7 +21,7 @@ class TurnState(State):
     def execute(self, userdata):
         while self.pose is None:
             rospy.logdebug('Waiting for odom...')
-            sleep(1)
+            rospy.sleep(1)
         rate = rospy.Rate(10)
         while True:
             diff = userdata.target_theta - self.pose.theta
