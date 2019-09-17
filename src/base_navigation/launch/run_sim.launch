@@ -1,4 +1,7 @@
 <launch>
   <include file="$(find base_navigation)/launch/simulator.launch" />
   <include file="$(find base_navigation)/launch/kobuki.launch" />
+  <include file="$(find base_navigation)/launch/control.launch">
+    <arg name="odom_topic" value="/odom" />
+  </include>
 </launch>

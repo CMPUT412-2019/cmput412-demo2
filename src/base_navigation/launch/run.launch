@@ -1,22 +1,6 @@
 <launch>
   <include file="$(find base_navigation)/launch/kobuki.launch" />
-  <node pkg="base_navigation" type="control.py" name="control" output="screen">
-    <param name="turn_tolerance" value="0.01" />
-    <param name="turn_speed" value="1" />
-    <remap from="pose2d" to="/pose2d" />
-    <remap from="odom" to="/mobile_base/odom" />
-    <remap from="cmd_vel" to="/cmd_vel_raw" />
-  </node>
-  <node pkg="nodelet" type="nodelet" name="velocity_smoother_nodelet_manager" args="manager" />
-  <node pkg="nodelet" type="nodelet" name="velocity_smoother"
-        args="load yocs_velocity_smoother/VelocitySmootherNodelet velocity_smoother_nodelet_manager">
-    <param name="accel_lim_v" value="0.05" />
-    <param name="accel_lim_w" value="1" />
-    <param name="speed_lim_v" value=".7" />
-    <param name="speed_lim_w" value="1.9" />
-    <param name="robot_feedback" value="1" />
-    <remap from="velocity_smoother/raw_cmd_vel" to="/cmd_vel_raw" />
-    <remap from="velocity_smoother/odometry" to="/mobile_base/odom" />
-    <remap from="velocity_smoother/smooth_cmd_vel" to="/cmd_vel_mux/input/teleop" />
-  </node>
+  <include file="$(find base_navigation)/launch/control.launch">
+    <arg name="odom_topic" value="/mobile_base/odom" />
+  </include>
 </launch>
