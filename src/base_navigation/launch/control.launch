@@ -12,9 +12,11 @@
     <param name="turn_tolerance" value="0.01" />
     <param name="turn_speed" value="1" />
     <param name="move_speed" value="0.7" />
+    <param name="position_threshold" value="0.1" />
     <remap from="pose2d" to="/pose2d" />
     <remap from="odom" to="$(arg odom_topic)" />
     <remap from="cmd_vel" to="/control/cmd_vel_raw" />
+    <remap from="bumper" to="/mobile_base/events/bumper" />
   </node>
 
   <!-- Velocity smoother -->
