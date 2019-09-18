@@ -11,6 +11,7 @@
   <node pkg="base_navigation" type="control.py" name="control" output="screen">
     <param name="turn_tolerance" value="0.01" />
     <param name="turn_speed" value="1" />
+    <param name="move_speed" value="0.7" />
     <remap from="pose2d" to="/pose2d" />
     <remap from="odom" to="$(arg odom_topic)" />
     <remap from="cmd_vel" to="/control/cmd_vel_raw" />
@@ -20,7 +21,7 @@
   <node pkg="nodelet" type="nodelet" name="velocity_smoother_nodelet_manager" args="manager" />
   <node pkg="nodelet" type="nodelet" name="velocity_smoother"
         args="load yocs_velocity_smoother/VelocitySmootherNodelet velocity_smoother_nodelet_manager">
-    <param name="accel_lim_v" value="0.05" />
+    <param name="accel_lim_v" value=".5" />
     <param name="accel_lim_w" value="1" />
     <param name="speed_lim_v" value=".7" />
     <param name="speed_lim_w" value="1.9" />
