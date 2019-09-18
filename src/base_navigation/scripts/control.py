@@ -5,6 +5,7 @@ import numpy as np
 
 import rospy
 from geometry_msgs.msg import Pose2D, Twist
+from kobuki_msgs.msg import BumperEvent
 from smach import State, StateMachine
 from smach_ros import IntrospectionServer
 from typing import List, Tuple
@@ -23,9 +24,15 @@ def get_odom():  # type: () -> Pose2D
     return get_odom.pose
 
 
+class CollisionException(Exception):
+    def __init__(self, bumper):  # type: (str) -> None
+        self.bumper = bumper
+        Exception.__init__(self, 'Bumper {} was pressed'.format(self.bumper))
+
+
 class MoveState(State):
     def __init__(self):
-        State.__init__(self, outcomes=['ok', 'err'], input_keys=['targets'])
+        State.__init__(self, outcomes=['ok', 'err', 'collision'], input_keys=['targets'], output_keys=['bumper_pressed'])
         self.pose_subscriber = rospy.Subscriber('pose2d', Pose2D, self.pose_callback, queue_size=10)
         self.bumper_subscriber = rospy.Subscriber('bumper', BumperEvent, self.bumper_callback, queue_size=10)
         self.twist_publisher = rospy.Publisher('cmd_vel', Twist, queue_size=10)
@@ -34,21 +41,35 @@ class MoveState(State):
         self.angular_speed = rospy.get_param('~turn_speed')
         self.position_threshold = rospy.get_param('~position_threshold')
         self.rate = rospy.Rate(10)
+        self.bumper_pressed = None
 
     def pose_callback(self, message):
         self.pose = message
 
+    def bumper_callback(self, message):  # type: (BumperEvent) -> None
+        bumper_map = {
+            message.LEFT: 'left',
+            message.RIGHT: 'right',
+            message.CENTER: 'center',
+        }
+        if message.state == message.PRESSED:
+            self.bumper_pressed = bumper_map[message.bumper]
+
     def execute(self, ud):
         targets = ud.targets  # type: List[Pose2D]
+        ud.bumper_pressed = None  # type: str
 
         while self.pose is None:
             rospy.logdebug('Waiting for odom...')
             rospy.sleep(1)
 
-        for target in targets:
-            self.drive_toward_target(target)
-        self.drive_to_target(targets[-1])
-
+        try:
+            for target in targets:
+                self.drive_toward_target(target)
+            self.drive_to_target(targets[-1])
+        except CollisionException as err:
+            ud.bumper_pressed = err.bumper
+            return 'collision'
         return 'ok'
 
     def drive_toward_target(self, target):  # type: (Pose2D) -> None
@@ -59,6 +80,8 @@ class MoveState(State):
         :return:
         """
         while True:
+            if self.bumper_pressed is not None:
+                raise CollisionException(self.bumper_pressed)
             dp, dtheta = self.get_deltas_to_target(target)
             if np.linalg.norm(dp) < self.position_threshold:
                 return
@@ -76,6 +99,8 @@ class MoveState(State):
         :return:
         """
         while True:
+            if self.bumper_pressed is not None:
+                raise CollisionException(self.bumper_pressed)
             dp, dtheta = self.get_deltas_to_target(target)
             if np.linalg.norm(dp) < self.position_threshold:
                 return
@@ -158,9 +183,9 @@ rospy.init_node('control_node')
 #     StateMachine.add('TURN2', TurnState(), transitions={'ok': 'TURN1'}, remapping={'target_theta': 'theta2'})
 
 
-sm = StateMachine(outcomes=['ok', 'err'], input_keys=['targets'])
+sm = StateMachine(outcomes=['ok', 'err', 'collision'], input_keys=['targets'])
 with sm:
-    StateMachine.add('MOVETO1', MoveState(), transitions={'ok': 'MOVETO1'}, remapping={'targets': 'targets'})
+    StateMachine.add('MOVETO1', MoveState(), transitions={'ok': 'MOVETO1'}, remapping={'targets': 'targets', 'bumper_pressed': 'bumper_pressed'})
 
 sis = IntrospectionServer('smach_server', sm, '/SM_ROOT')
 sis.start()
