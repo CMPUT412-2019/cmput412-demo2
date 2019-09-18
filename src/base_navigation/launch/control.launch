@@ -16,6 +16,7 @@
     <remap from="pose2d" to="/pose2d" />
     <remap from="odom" to="$(arg odom_topic)" />
     <remap from="cmd_vel" to="/control/cmd_vel_raw" />
+    <remap from="bumper" to="/mobile_base/events/bumper" />
   </node>
 
   <!-- Velocity smoother -->
