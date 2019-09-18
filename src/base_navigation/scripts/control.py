@@ -31,6 +31,7 @@ class MoveState(State):
         self.pose = None  # type: Pose2D
         self.speed = rospy.get_param('~move_speed')
         self.angular_speed = rospy.get_param('~turn_speed')
+        self.position_threshold = rospy.get_param('~position_threshold')
 
     def pose_callback(self, message):
         self.pose = message
@@ -52,7 +53,7 @@ class MoveState(State):
             if abs(dtheta) > np.pi:
                 dtheta = dtheta - np.sign(dtheta)*2*np.pi
 
-            if dx**2 + dy**2 < 0.1**2:
+            if dx**2 + dy**2 < self.position_threshold**2:
                 break
 
             v = np.array([dx, dy])
