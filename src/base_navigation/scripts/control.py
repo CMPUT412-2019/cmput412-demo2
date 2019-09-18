@@ -9,6 +9,7 @@ from kobuki_msgs.msg import BumperEvent, Sound
 from smach import State, StateMachine
 from smach_ros import IntrospectionServer
 from typing import List, Tuple
+from map import Map
 
 
 def get_odom():  # type: () -> Pose2D
@@ -56,6 +57,8 @@ class MoveState(State):
             self.bumper_pressed = bumper_map[message.bumper]
 
     def execute(self, ud):
+        self.pose = None
+        self.bumper_pressed = None
         targets = ud.targets  # type: List[Pose2D]
         ud.bumper_pressed = None  # type: str
 
@@ -132,18 +135,23 @@ class MoveState(State):
 class MoveBackwardState(State):
     def __init__(self):
         State.__init__(self, outcomes=['ok', 'err'])
-        self.twist_publisher = rospy.Publisher('cmd_vel', Twist, queue_size=1)
+        self.twist_publisher = rospy.Publisher('cmd_vel', Twist, queue_size=10)
         self.rate = rospy.Rate(10)
-        self.duration = 2
+        self.duration = 1
         self.speed = rospy.get_param('~move_speed')
 
     def execute(self, ud):
         start_time = rospy.get_time()
-        while not rospy.is_shutdown() and (rospy.get_time() - start_time) < self.duration:
+        while True:
+            if rospy.is_shutdown():
+                break
+            if (rospy.get_time() - start_time) >= self.duration:
+                break
             t = Twist()
             t.linear.x = -self.speed
             self.twist_publisher.publish(t)
             self.rate.sleep()
+        self.twist_publisher.publish(Twist())
         return 'ok'
 
 
@@ -187,6 +195,51 @@ class PlayFinishSound(State):
         return 'ok'
 
 
+class PlanTargets(State):
+    def __init__(self):
+        State.__init__(self, outcomes=['ok', 'err'], input_keys=['world_map', 'goal'], output_keys=['targets', 'world_map'])
+        self.pose_subscriber = rospy.Subscriber('pose2d', Pose2D, self.pose_callback, queue_size=10)
+        self.pose = None  # type: Pose2D
+
+    def pose_callback(self, message):  # type: (Pose2D) -> None
+        self.pose = message
+
+    def execute(self, ud):
+        while self.pose is None:
+            rospy.loginfo('Waiting for pose...')
+            rospy.sleep(1)
+
+        world_map = ud.world_map  # type: Map
+        goal = ud.goal  # type: Pose2D
+        targets = world_map.pathfind(
+            start=np.array([self.pose.x, self.pose.y]),
+            end=np.array([goal.x, goal.y]),
+        )
+        ud.targets = [
+            Pose2D(x=target[0], y=target[1]) for target in targets
+        ]
+        return 'ok'
+
+
+class UpdateMap(State):
+    def __init__(self):
+        State.__init__(self, outcomes=['ok', 'err'], input_keys=['world_map'], output_keys=['world_map'])
+        self.pose_subscriber = rospy.Subscriber('pose2d', Pose2D, self.pose_callback, queue_size=10)
+        self.pose = None  # type: Pose2D
+
+    def pose_callback(self, message):  # type: (Pose2D) -> None
+        self.pose = message
+
+    def execute(self, ud):
+        while self.pose is None:
+            rospy.loginfo('Waiting for pose...')
+            rospy.sleep(1)
+        world_map = ud.world_map  # type: Map
+        world_map.fill_circle(np.array([self.pose.x, self.pose.y]), 1)
+        world_map.image().show()
+        return 'ok'
+
+
 rospy.init_node('control_node')
 
 # sm = StateMachine(outcomes=['ok', 'err'], input_keys=['theta1', 'theta2'])
@@ -195,15 +248,20 @@ rospy.init_node('control_node')
 #     StateMachine.add('TURN2', TurnState(), transitions={'ok': 'TURN1'}, remapping={'target_theta': 'theta2'})
 
 
-sm = StateMachine(outcomes=['ok', 'err', 'collision'], input_keys=['targets'])
+sm = StateMachine(outcomes=['ok', 'err'], input_keys=['world_map', 'goal'])
 with sm:
-    StateMachine.add('MOVETO1', MoveState(), transitions={'ok': 'PLAYSOUND'}, remapping={'targets': 'targets', 'bumper_pressed': 'bumper_pressed'})
+    StateMachine.add('PLAN', PlanTargets(), transitions={'ok': 'MOVE'})
+    StateMachine.add('MOVE', MoveState(), transitions={'ok': 'PLAYSOUND', 'collision': 'UPDATEMAP'})
     StateMachine.add('PLAYSOUND', PlayFinishSound())
+    StateMachine.add('UPDATEMAP', UpdateMap(), transitions={'ok': 'BACKUP'})
+    StateMachine.add('BACKUP', MoveBackwardState(), transitions={'ok': 'PLAN'})
 
 sis = IntrospectionServer('smach_server', sm, '/SM_ROOT')
 sis.start()
 
 # sm.execute({'theta1': 3.14159/2, 'theta2': 0.0})
+
+world_map = Map(np.array([0, 0]), scale=1)
 
 initial_pose = get_odom()
 pose1 = Pose2D(x=initial_pose.x, y=initial_pose.y)
@@ -211,13 +269,6 @@ pose2 = Pose2D(x=initial_pose.x - 2, y=initial_pose.y + 2)
 pose3 = Pose2D(x=initial_pose.x - 2, y=initial_pose.y)
 
 sm.execute({
-    'targets': [
-                   Pose2D(x=initial_pose.x, y=initial_pose.y),
-                   Pose2D(x=initial_pose.x - 1, y=initial_pose.y + 1),
-                   Pose2D(x=initial_pose.x - 2, y=initial_pose.y + 2),
-                   Pose2D(x=initial_pose.x - 3, y=initial_pose.y + 3),
-                   Pose2D(x=initial_pose.x - 4, y=initial_pose.y + 4),
-                   Pose2D(x=initial_pose.x - 5, y=initial_pose.y + 5),
-                   Pose2D(x=initial_pose.x - 2, y=initial_pose.y)
-               ],
+    'world_map': world_map,
+    'goal': Pose2D(x=3, y=-2),
 })
