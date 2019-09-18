@@ -17,6 +17,7 @@
     <remap from="odom" to="$(arg odom_topic)" />
     <remap from="cmd_vel" to="/control/cmd_vel_raw" />
     <remap from="bumper" to="/mobile_base/events/bumper" />
+    <remap from="sound" to="/mobile_base/commands/sound" />
   </node>
 
   <!-- Velocity smoother -->

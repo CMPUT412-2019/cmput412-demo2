@@ -5,7 +5,7 @@ import numpy as np
 
 import rospy
 from geometry_msgs.msg import Pose2D, Twist
-from kobuki_msgs.msg import BumperEvent
+from kobuki_msgs.msg import BumperEvent, Sound
 from smach import State, StateMachine
 from smach_ros import IntrospectionServer
 from typing import List, Tuple
@@ -175,6 +175,18 @@ class TurnState(State):
         return 'ok'
 
 
+class PlayFinishSound(State):
+    def __init__(self):
+        State.__init__(self, outcomes=['ok', 'err'])
+        self.publisher = rospy.Publisher('sound', Sound, queue_size=10)
+
+    def execute(self, userdata):
+        sound = Sound()
+        sound.value = sound.ON
+        self.publisher.publish(sound)
+        return 'ok'
+
+
 rospy.init_node('control_node')
 
 # sm = StateMachine(outcomes=['ok', 'err'], input_keys=['theta1', 'theta2'])
@@ -185,7 +197,8 @@ rospy.init_node('control_node')
 
 sm = StateMachine(outcomes=['ok', 'err', 'collision'], input_keys=['targets'])
 with sm:
-    StateMachine.add('MOVETO1', MoveState(), transitions={'ok': 'MOVETO1'}, remapping={'targets': 'targets', 'bumper_pressed': 'bumper_pressed'})
+    StateMachine.add('MOVETO1', MoveState(), transitions={'ok': 'PLAYSOUND'}, remapping={'targets': 'targets', 'bumper_pressed': 'bumper_pressed'})
+    StateMachine.add('PLAYSOUND', PlayFinishSound())
 
 sis = IntrospectionServer('smach_server', sm, '/SM_ROOT')
 sis.start()
@@ -206,5 +219,5 @@ sm.execute({
                    Pose2D(x=initial_pose.x - 4, y=initial_pose.y + 4),
                    Pose2D(x=initial_pose.x - 5, y=initial_pose.y + 5),
                    Pose2D(x=initial_pose.x - 2, y=initial_pose.y)
-               ]*100,
+               ],
 })
