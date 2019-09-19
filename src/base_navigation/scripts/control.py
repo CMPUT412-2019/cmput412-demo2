@@ -6,23 +6,57 @@ import numpy as np
 import rospy
 from geometry_msgs.msg import Pose2D, Twist
 from kobuki_msgs.msg import BumperEvent, Sound
+from sensor_msgs.msg import Joy
 from smach import State, StateMachine
 from smach_ros import IntrospectionServer
 from typing import List, Tuple
 from map import Map
 
 
-def get_odom():  # type: () -> Pose2D
-    get_odom.pose = None
+sound_pub = publisher = rospy.Publisher('sound', Sound, queue_size=10)
 
-    def pose_callback(pose):
-        get_odom.pose = pose
 
-    _ = rospy.Subscriber('pose2d', Pose2D, pose_callback, queue_size=10)
-    while get_odom.pose is None:
-        rospy.sleep(0.5)
+def withsound(fn):
 
-    return get_odom.pose
+    def inner(*args, **kwargs):
+
+        sound = Sound()
+        sound.value = sound.ON
+        sound_pub.publish(sound)
+        fn(*args, **kwargs)
+
+    return inner
+
+
+class SubscriberValue:
+    def __init__(self, topic, data_class, initial_value=None, transformation=None, queue_size=10):
+        self._subscriber = rospy.Subscriber(topic, data_class, self._callback, queue_size=queue_size)
+        self._initial_value = initial_value
+        self._value = self._initial_value
+        self._transformation = transformation
+        self._unset = True
+
+    def _callback(self, message):
+        if self._transformation is None:
+            self._value = message
+        else:
+            value, change = self._transformation(message)
+            if change:
+                self._unset = False
+                self._value = value
+
+    def reset(self):
+        self._value = self._initial_value
+        self._unset = True
+
+    def wait(self, interval=1):
+        while self._unset:
+            rospy.logdebug('Waiting for message...')
+            rospy.sleep(interval)
+
+    @property
+    def value(self):
+        return self._value
 
 
 class CollisionException(Exception):
@@ -34,38 +68,32 @@ class CollisionException(Exception):
 class MoveState(State):
     def __init__(self):
         State.__init__(self, outcomes=['ok', 'err', 'collision'], input_keys=['targets'], output_keys=['bumper_pressed'])
-        self.pose_subscriber = rospy.Subscriber('pose2d', Pose2D, self.pose_callback, queue_size=10)
-        self.bumper_subscriber = rospy.Subscriber('bumper', BumperEvent, self.bumper_callback, queue_size=10)
+        self.pose = SubscriberValue('pose2d', Pose2D)
+        self.bumper_pressed = SubscriberValue('bumper', BumperEvent, transformation=self.transform_bumper_message)
         self.twist_publisher = rospy.Publisher('cmd_vel', Twist, queue_size=10)
-        self.pose = None  # type: Pose2D
         self.speed = rospy.get_param('~move_speed')
         self.angular_speed = rospy.get_param('~turn_speed')
         self.position_threshold = rospy.get_param('~position_threshold')
         self.rate = rospy.Rate(10)
-        self.bumper_pressed = None
 
-    def pose_callback(self, message):
-        self.pose = message
-
-    def bumper_callback(self, message):  # type: (BumperEvent) -> None
+    def transform_bumper_message(self, message):  # type: (BumperEvent) -> Tuple[str, bool]
         bumper_map = {
             message.LEFT: 'left',
             message.RIGHT: 'right',
             message.CENTER: 'center',
         }
         if message.state == message.PRESSED:
-            self.bumper_pressed = bumper_map[message.bumper]
+            return bumper_map[message.bumper], True
+        else:
+            return None, False
 
+    @withsound
     def execute(self, ud):
-        self.pose = None
-        self.bumper_pressed = None
+        self.bumper_pressed.reset()
         targets = ud.targets  # type: List[Pose2D]
         ud.bumper_pressed = None  # type: str
 
-        while self.pose is None:
-            rospy.logdebug('Waiting for odom...')
-            rospy.sleep(1)
-
+        self.pose.wait()
         try:
             for target in targets:
                 self.drive_toward_target(target)
@@ -116,7 +144,7 @@ class MoveState(State):
             self.rate.sleep()
 
     def get_deltas_to_target(self, target):  # type: (Pose2D) -> Tuple[np.ndarray, float]
-        pose = self.pose
+        pose = self.pose.value
 
         dx = target.x - pose.x
         dy = target.y - pose.y
@@ -127,7 +155,7 @@ class MoveState(State):
 
     def publish_twist(self, v, vtheta):  # type: (np.ndarray, float) -> None
         t = Twist()
-        t.linear.x = max(0, v[0] * math.cos(self.pose.theta) + v[1] * math.sin(self.pose.theta))
+        t.linear.x = max(0, v[0] * math.cos(self.pose.value.theta) + v[1] * math.sin(self.pose.value.theta))
         t.angular.z = vtheta
         self.twist_publisher.publish(t)
 
@@ -137,9 +165,10 @@ class MoveBackwardState(State):
         State.__init__(self, outcomes=['ok', 'err'])
         self.twist_publisher = rospy.Publisher('cmd_vel', Twist, queue_size=10)
         self.rate = rospy.Rate(10)
-        self.duration = 1
+        self.duration = 3
         self.speed = rospy.get_param('~move_speed')
 
+    @withsound
     def execute(self, ud):
         start_time = rospy.get_time()
         while True:
@@ -152,34 +181,6 @@ class MoveBackwardState(State):
             self.twist_publisher.publish(t)
             self.rate.sleep()
         self.twist_publisher.publish(Twist())
-        return 'ok'
-
-
-class TurnState(State):
-    def __init__(self):
-        State.__init__(self, outcomes=['ok', 'err'], input_keys=['target_theta'])
-        self.pose_subscriber = rospy.Subscriber('pose2d', Pose2D, self.pose_callback, queue_size=10)
-        self.twist_publisher = rospy.Publisher('cmd_vel', Twist, queue_size=10)
-        self.pose = None
-        self.tolerance = rospy.get_param('~turn_tolerance')
-        self.speed = rospy.get_param('~turn_speed')
-
-    def pose_callback(self, message):
-        self.pose = message
-
-    def execute(self, userdata):
-        while self.pose is None:
-            rospy.logdebug('Waiting for odom...')
-            rospy.sleep(1)
-        rate = rospy.Rate(10)
-        while True:
-            diff = userdata.target_theta - self.pose.theta
-            if abs(diff) < self.tolerance:
-                break
-            t = Twist()
-            t.angular.z = diff/abs(diff)*self.speed
-            self.twist_publisher.publish(t)
-            rate.sleep()
         return 'ok'
 
 
@@ -198,21 +199,16 @@ class PlayFinishSound(State):
 class PlanTargets(State):
     def __init__(self):
         State.__init__(self, outcomes=['ok', 'err'], input_keys=['world_map', 'goal'], output_keys=['targets', 'world_map'])
-        self.pose_subscriber = rospy.Subscriber('pose2d', Pose2D, self.pose_callback, queue_size=10)
-        self.pose = None  # type: Pose2D
+        self.pose = SubscriberValue('pose2d', Pose2D)
 
-    def pose_callback(self, message):  # type: (Pose2D) -> None
-        self.pose = message
-
+    @withsound
     def execute(self, ud):
-        while self.pose is None:
-            rospy.loginfo('Waiting for pose...')
-            rospy.sleep(1)
+        self.pose.wait()
 
         world_map = ud.world_map  # type: Map
         goal = ud.goal  # type: Pose2D
         targets = world_map.pathfind(
-            start=np.array([self.pose.x, self.pose.y]),
+            start=np.array([self.pose.value.x, self.pose.value.y]),
             end=np.array([goal.x, goal.y]),
         )
         ud.targets = [
@@ -224,19 +220,25 @@ class PlanTargets(State):
 class UpdateMap(State):
     def __init__(self):
         State.__init__(self, outcomes=['ok', 'err'], input_keys=['world_map'], output_keys=['world_map'])
-        self.pose_subscriber = rospy.Subscriber('pose2d', Pose2D, self.pose_callback, queue_size=10)
-        self.pose = None  # type: Pose2D
+        self.pose = SubscriberValue('pose2d', Pose2D)
 
-    def pose_callback(self, message):  # type: (Pose2D) -> None
-        self.pose = message
-
+    @withsound
     def execute(self, ud):
-        while self.pose is None:
-            rospy.loginfo('Waiting for pose...')
-            rospy.sleep(1)
+        self.pose.wait()
         world_map = ud.world_map  # type: Map
-        world_map.fill_circle(np.array([self.pose.x, self.pose.y]), 1)
+        world_map.fill_circle(np.array([self.pose.value.x, self.pose.value.y]), 1)
         world_map.image().show()
+        return 'ok'
+
+
+class WaitForJoystick(State):
+    def __init__(self):
+        State.__init__(self, outcomes=['ok', 'err'])
+        self.joy_message = SubscriberValue('joy', Joy)
+
+    @withsound
+    def execute(self, ud):
+        self.joy.wait()
         return 'ok'
 
 
@@ -250,25 +252,19 @@ rospy.init_node('control_node')
 
 sm = StateMachine(outcomes=['ok', 'err'], input_keys=['world_map', 'goal'])
 with sm:
+    StateMachine.add('WAIT', WaitForJoystick(), transitions={'ok': 'PLAN'})
     StateMachine.add('PLAN', PlanTargets(), transitions={'ok': 'MOVE'})
     StateMachine.add('MOVE', MoveState(), transitions={'ok': 'PLAYSOUND', 'collision': 'UPDATEMAP'})
-    StateMachine.add('PLAYSOUND', PlayFinishSound())
+    StateMachine.add('PLAYSOUND', PlayFinishSound(), transitions={'ok': 'WAIT'})
     StateMachine.add('UPDATEMAP', UpdateMap(), transitions={'ok': 'BACKUP'})
     StateMachine.add('BACKUP', MoveBackwardState(), transitions={'ok': 'PLAN'})
 
 sis = IntrospectionServer('smach_server', sm, '/SM_ROOT')
 sis.start()
 
-# sm.execute({'theta1': 3.14159/2, 'theta2': 0.0})
-
-world_map = Map(np.array([0, 0]), scale=1)
-
-initial_pose = get_odom()
-pose1 = Pose2D(x=initial_pose.x, y=initial_pose.y)
-pose2 = Pose2D(x=initial_pose.x - 2, y=initial_pose.y + 2)
-pose3 = Pose2D(x=initial_pose.x - 2, y=initial_pose.y)
+world_map = Map(np.array([0, 0]), scale=0.05, width=100, height=100)
 
 sm.execute({
     'world_map': world_map,
-    'goal': Pose2D(x=3, y=-2),
+    'goal': Pose2D(x=4, y=0),
 })

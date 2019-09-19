@@ -1,5 +1,6 @@
 <launch>
   <arg name="odom_topic" />
+  <arg name="move_speed" value="0.5" />
 
   <!-- Convert odometry to Pose2D -->
   <node pkg="kobuki_node" type="getOdom2D.py" name="getOdom2D">
@@ -11,13 +12,14 @@
   <node pkg="base_navigation" type="control.py" name="control" output="screen">
     <param name="turn_tolerance" value="0.01" />
     <param name="turn_speed" value="1" />
-    <param name="move_speed" value="0.7" />
+    <param name="move_speed" value="$(arg move_speed)" />
     <param name="position_threshold" value="0.1" />
     <remap from="pose2d" to="/pose2d" />
     <remap from="odom" to="$(arg odom_topic)" />
     <remap from="cmd_vel" to="/control/cmd_vel_raw" />
     <remap from="bumper" to="/mobile_base/events/bumper" />
     <remap from="sound" to="/mobile_base/commands/sound" />
+    <remap from="joy" to="/joy" />
   </node>
 
   <!-- Velocity smoother -->
@@ -33,4 +35,6 @@
     <remap from="velocity_smoother/odometry" to="/$(arg odom_topic)" />
     <remap from="velocity_smoother/smooth_cmd_vel" to="/cmd_vel_mux/input/teleop" />
   </node>
+
+  <node pkg="joy" type="joy_node" name="joy_node" />
 </launch>
